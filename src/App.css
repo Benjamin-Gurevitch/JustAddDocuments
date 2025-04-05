@@ -1295,16 +1295,44 @@ body {
 
 .visualization-placeholder.error .placeholder-status {
   display: flex;
-  background-color: #fef2f2;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  background-color: rgba(254, 226, 226, 0.6);
   padding: 1rem;
-  border-radius: 8px;
-  border: 1px solid #fee2e2;
-  color: #991b1b;
+  border-radius: var(--radius-md);
+  margin-top: 0.5rem;
+}
+
+.retry-button {
+  background: var(--primary-color);
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0.5rem;
+}
+
+.retry-button:hover {
+  background: var(--primary-hover);
+  transform: translateY(-1px);
+}
+
+.retry-button:disabled {
+  background-color: #9ca3af;
+  cursor: not-allowed;
 }
 
 .visualization-placeholder.error .error-icon {
-  margin-right: 12px;
   font-size: 1.5rem;
+  margin-bottom: 0.5rem;
 }
 
 .embedded-visualization-container {
@@ -1397,4 +1425,76 @@ body {
 .learning-results {
   max-width: 900px;
   margin: 0 auto;
+}
+
+.delete-tab-btn {
+  background: none;
+  border: none;
+  color: #9ca3af;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.25rem;
+  margin-left: 0.25rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  transition: all 0.2s ease;
+  opacity: 0;
+}
+
+.global-tab-button:hover .delete-tab-btn {
+  opacity: 1;
+}
+
+.delete-tab-btn:hover {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: var(--error-color);
+}
+
+.delete-tab-btn:active {
+  transform: scale(0.9);
+}
+
+/* Fix sidebar tab styling to accommodate delete button */
+.global-tab-button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.sidebar-header span {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.clear-all-btn {
+  background: none;
+  border: none;
+  font-size: 0.7rem;
+  color: #9ca3af;
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.clear-all-btn:hover {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: var(--error-color);
 }

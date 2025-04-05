@@ -85,6 +85,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
+  const [cachedFile, setCachedFile] = useState<File | null>(null); // Store the last uploaded file for visualization regeneration
   const [error, setError] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [learningTabs, setLearningTabs] = useState<LearningTab[]>([]);
@@ -97,6 +98,79 @@ const FileUpload: React.FC<FileUploadProps> = ({
 
   // Add a debug mode state
   const [debugMode, setDebugMode] = useState<boolean>(false);
+
+  // Load saved tabs from localStorage on initial render
+  useEffect(() => {
+    const savedTabs = localStorage.getItem('learningTabs');
+    if (savedTabs) {
+      try {
+        const parsedTabs = JSON.parse(savedTabs);
+        
+        // Ensure all properties are properly set after deserialization
+        const restoredTabs = parsedTabs.map((tab: any) => ({
+          ...tab,
+          visualizations: tab.visualizations.map((vis: any) => ({
+            ...vis,
+            status: vis.status || 'ready' // Ensure status is set
+          }))
+        }));
+        
+        setLearningTabs(restoredTabs);
+        
+        // If there are tabs, activate the most recent one
+        if (restoredTabs.length > 0) {
+          setActiveTab(restoredTabs[restoredTabs.length - 1].id);
+          setView('content');
+        }
+      } catch (e) {
+        console.error('Error parsing saved tabs:', e);
+        // If there's an error parsing, clear the localStorage
+        localStorage.removeItem('learningTabs');
+      }
+    }
+  }, []);
+
+  // Save tabs to localStorage whenever they change
+  useEffect(() => {
+    // Only save if there are tabs to save
+    if (learningTabs.length > 0) {
+      try {
+        localStorage.setItem('learningTabs', JSON.stringify(learningTabs));
+      } catch (e) {
+        console.error('Error saving tabs to localStorage:', e);
+      }
+    } else {
+      // If no tabs, remove the item from localStorage
+      localStorage.removeItem('learningTabs');
+    }
+  }, [learningTabs]);
+
+  // Function to delete a learning tab
+  const handleDeleteTab = useCallback((tabId: string, e: React.MouseEvent) => {
+    // Prevent the click from bubbling up to the parent button
+    e.stopPropagation();
+    
+    // Ask for confirmation before deleting
+    if (!window.confirm('Are you sure you want to delete this tab? This action cannot be undone.')) {
+      return;
+    }
+    
+    // Filter out the tab to delete
+    const updatedTabs = learningTabs.filter(tab => tab.id !== tabId);
+    setLearningTabs(updatedTabs);
+    
+    // If the active tab is being deleted, set a new active tab
+    if (activeTab === tabId) {
+      if (updatedTabs.length > 0) {
+        // Set the last tab as active
+        setActiveTab(updatedTabs[updatedTabs.length - 1].id);
+      } else {
+        // If no tabs remain, go back to upload view
+        setActiveTab(null);
+        setView('upload');
+      }
+    }
+  }, [learningTabs, activeTab]);
 
   // Store generated visualization code as components
   useEffect(() => {
@@ -469,6 +543,9 @@ const FileUpload: React.FC<FileUploadProps> = ({
     
     setLoading(true);
     setError('');
+    
+    // Cache the file for potential regeneration of visualizations
+    setCachedFile(file);
 
     // Use setTimeout to allow UI update before heavy work
     setTimeout(async () => {
@@ -513,12 +590,45 @@ const FileUpload: React.FC<FileUploadProps> = ({
     // First apply markdown formatting
     let formattedText = markdownToHtml(text);
     
-    // Then handle visualization placeholders
-    visualizations.forEach(visualization => {
-      const placeholderTag = `{{VISUALIZATION:${visualization.id}:${visualization.description}}}`;
+    // Extract all visualization placeholders from the text
+    const placeholderRegex = /{{VISUALIZATION:([a-zA-Z0-9_]+):([^}]+)}}/g;
+    const placeholdersInText: Array<{id: string, description: string}> = [];
+    
+    let match;
+    while ((match = placeholderRegex.exec(text)) !== null) {
+      placeholdersInText.push({
+        id: match[1],
+        description: match[2]
+      });
+    }
+    
+    // Handle each placeholder found in the text
+    placeholdersInText.forEach(placeholder => {
+      const { id, description } = placeholder;
+      const placeholderTag = `{{VISUALIZATION:${id}:${description}}}`;
+      
+      // Find if we have this visualization in our array
+      const visualization = visualizations.find(v => v.id === id);
       let replacementHtml = '';
       
-      if (visualization.status === 'loading') {
+      if (!visualization) {
+        // This is a placeholder without a corresponding visualization
+        // Add a "Visual failed to generate" message with retry button
+        replacementHtml = `<div class="visualization-placeholder error">
+          <h4>Visualization: ${description}</h4>
+          <div class="placeholder-status error">
+            <div class="error-icon">⚠️</div>
+            <div>Visual failed to generate</div>
+            <button 
+              class="retry-button"
+              onclick="window.dispatchEvent(new CustomEvent('regenerate-visualization', { detail: { id: '${id}', description: '${description.replace(/'/g, "\\'")}' } }))"
+              ${regeneratingVisualizations[id] ? 'disabled' : ''}
+            >
+              ${regeneratingVisualizations[id] ? 'Regenerating...' : 'Retry'}
+            </button>
+          </div>
+        </div>`;
+      } else if (visualization.status === 'loading') {
         replacementHtml = `<div class="visualization-placeholder loading">
           <h4>Visualization: ${visualization.description}</h4>
           <div class="placeholder-status">
@@ -862,6 +972,106 @@ const FileUpload: React.FC<FileUploadProps> = ({
     }
   }, [view, activeTab, learningTabs]);
 
+  const [regeneratingVisualizations, setRegeneratingVisualizations] = useState<Record<string, boolean>>({});
+
+  // Function to handle regeneration of a failed visualization
+  const handleRegenerateVisualization = useCallback(async (visId: string, description: string) => {
+    if (!activeTab) return;
+    
+    // Check if we have the file or the cached file
+    const fileToUse = file || cachedFile;
+    if (!fileToUse) {
+      console.error('No file available for visualization regeneration');
+      return;
+    }
+    
+    // Mark this visualization as regenerating
+    setRegeneratingVisualizations(prev => ({ ...prev, [visId]: true }));
+    
+    try {
+      // Get the current tab
+      const currentTab = learningTabs.find(t => t.id === activeTab);
+      if (!currentTab) return;
+      
+      // Convert file to base64 again
+      const base64Data = await convertToBase64(fileToUse);
+      
+      // Generate a new visualization for this placeholder
+      const newVisualizationCode = await generateVisualizationForPlaceholder(description, base64Data);
+      
+      // Update the visualization in the tab
+      const updatedVisualization = {
+        id: visId,
+        description,
+        code: newVisualizationCode,
+        status: 'ready' as const
+      };
+      
+      // Update the tab with the new visualization
+      const updatedTabs = learningTabs.map(tab => {
+        if (tab.id === activeTab) {
+          // Find the visualization and update it, or add it if it doesn't exist
+          const visualizationExists = tab.visualizations.some(v => v.id === visId);
+          
+          if (visualizationExists) {
+            return {
+              ...tab,
+              visualizations: tab.visualizations.map(v => 
+                v.id === visId ? updatedVisualization : v
+              )
+            };
+          } else {
+            return {
+              ...tab,
+              visualizations: [...tab.visualizations, updatedVisualization]
+            };
+          }
+        }
+        return tab;
+      });
+      
+      setLearningTabs(updatedTabs);
+      
+      // Refresh the display
+      setActiveTab(activeTab);
+    } catch (error) {
+      console.error('Error regenerating visualization:', error);
+    } finally {
+      setRegeneratingVisualizations(prev => ({ ...prev, [visId]: false }));
+    }
+  }, [activeTab, file, cachedFile, learningTabs, setLearningTabs, setActiveTab, convertToBase64]);
+
+  // Add listener for visualization regeneration events
+  useEffect(() => {
+    const handleRegenerateEvent = (event: CustomEvent) => {
+      const { id, description } = event.detail;
+      handleRegenerateVisualization(id, description);
+    };
+
+    // Add the event listener
+    window.addEventListener('regenerate-visualization', handleRegenerateEvent as EventListener);
+
+    // Clean up
+    return () => {
+      window.removeEventListener('regenerate-visualization', handleRegenerateEvent as EventListener);
+    };
+  }, [handleRegenerateVisualization]);
+
+  // Function to handle clearing all tabs
+  const handleClearAllTabs = useCallback(() => {
+    if (learningTabs.length === 0) return;
+    
+    if (window.confirm('Are you sure you want to delete ALL tabs? This action cannot be undone.')) {
+      // Clear all tabs
+      setLearningTabs([]);
+      setActiveTab(null);
+      setView('upload');
+      
+      // Clear localStorage
+      localStorage.removeItem('learningTabs');
+    }
+  }, [learningTabs]);
+
   return (
     <div className="app-layout">
       {/* Global sidebar with tabs */}
@@ -875,7 +1085,19 @@ const FileUpload: React.FC<FileUploadProps> = ({
         </button>
         
         {learningTabs.length > 0 && (
-          <div className="sidebar-divider"></div>
+          <>
+            <div className="sidebar-divider"></div>
+            <div className="sidebar-header">
+              <span>Your Lessons</span>
+              <button 
+                className="clear-all-btn" 
+                onClick={handleClearAllTabs}
+                title="Clear All Lessons"
+              >
+                Clear All
+              </button>
+            </div>
+          </>
         )}
         
         <div className="global-tabs-list">
@@ -891,6 +1113,13 @@ const FileUpload: React.FC<FileUploadProps> = ({
               >
                 <span className="sidebar-icon">📝</span>
                 <span className="tab-title">{tab.title}</span>
+                <button 
+                  className="delete-tab-btn"
+                  onClick={(e) => handleDeleteTab(tab.id, e)} 
+                  title="Delete tab"
+                >
+                  ×
+                </button>
               </button>
             </React.Fragment>
           ))}

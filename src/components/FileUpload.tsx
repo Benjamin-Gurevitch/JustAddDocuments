@@ -727,9 +727,9 @@ const FileUpload: React.FC<FileUploadProps> = ({
           .replace(/'/g, "&#039;");
 
         // Add a regenerate button in the header
-        replacementHtml = `<div class="visualization-placeholder ready">
+        replacementHtml = `<div class="visualization-placeholder ready animated fade-in-up">
           <div class="visualization-header">
-            <h4>Visualization: ${visualization.description}</h4>
+            <h4>Visualization: ${description}</h4>
             <button 
               class="regenerate-button"
               onclick="window.dispatchEvent(new CustomEvent('regenerate-visualization', { detail: { id: '${id}', description: '${description.replace(/'/g, "\\'")}' } }))"
@@ -753,6 +753,16 @@ const FileUpload: React.FC<FileUploadProps> = ({
     
     // Remove any remaining text in curly braces ({{...}}) after processing visualizations
     formattedText = formattedText.replace(/{{[^}]+}}/g, '');
+
+    // Apply syntax highlighting to code elements (wrapped in animation classes)
+    formattedText = formattedText.replace(/<code>(.*?)<\/code>/g, '<code class="animated scale-in">$1</code>');
+    
+    // Wrap key terms with highlight effect
+    const importantTerms = ['note', 'important', 'key concept', 'remember', 'definition'];
+    importantTerms.forEach(term => {
+      const regex = new RegExp(`\\b(${term})\\b`, 'gi');
+      formattedText = formattedText.replace(regex, '<span class="highlight-text">$1</span>');
+    });
     
     // Add safety for direct rendering
     return { __html: formattedText };
@@ -1477,6 +1487,157 @@ const FileUpload: React.FC<FileUploadProps> = ({
       localStorage.removeItem('learningTabs');
     }
   }, [learningTabs]);
+
+  // This useEffect sets up animations for elements as they scroll into view
+  useEffect(() => {
+    if (view === 'content' && activeTab) {
+      // Add animation classes to elements when they come into view
+      const setupScrollAnimations = () => {
+        const contentElement = document.querySelector('.learning-content-text');
+        if (!contentElement) return;
+        
+        // Add animation classes to headings, paragraphs, lists, and blockquotes
+        const h1Elements = contentElement.querySelectorAll('h1');
+        const h2Elements = contentElement.querySelectorAll('h2');
+        const h3Elements = contentElement.querySelectorAll('h3');
+        const paragraphs = contentElement.querySelectorAll('p');
+        const lists = contentElement.querySelectorAll('ul, ol');
+        const blockquotes = contentElement.querySelectorAll('blockquote');
+        
+        // Add decorative particles to headings
+        h1Elements.forEach(heading => {
+          // Add 3-5 particles around each h1
+          const particleCount = Math.floor(Math.random() * 3) + 3;
+          for (let i = 0; i < particleCount; i++) {
+            const particle = document.createElement('span');
+            particle.classList.add('particle');
+            particle.style.left = `${Math.random() * 80 + 10}%`;
+            particle.style.top = `${Math.random() * 100}%`;
+            particle.style.setProperty('--delay', `${Math.random() * 2}s`);
+            heading.appendChild(particle);
+          }
+        });
+        
+        // Helper function to apply animation classes with staggered delays
+        const applyAnimationClasses = (elements: NodeListOf<Element>, animationClass: string) => {
+          elements.forEach((el, index) => {
+            // Don't animate elements that already have animation classes
+            if (el.classList.contains('animated')) return;
+            
+            // Set base animation classes
+            el.classList.add('animated');
+            el.classList.add(animationClass);
+            
+            // Add staggered delays based on position
+            const delay = Math.min(index % 3, 2); // 0, 1, or 2
+            if (delay > 0) {
+              el.classList.add(`animated-delay-${delay}`);
+            }
+          });
+        };
+
+        // Create an Intersection Observer
+        const observer = new IntersectionObserver((entries) => {
+          entries.forEach(entry => {
+            if (entry.isIntersecting) {
+              // Element is now visible
+              const element = entry.target;
+              
+              // Apply different animation based on element type
+              if (element.tagName === 'H1') {
+                element.classList.add('animated', 'fade-in-up');
+              } else if (element.tagName === 'H2') {
+                element.classList.add('animated', 'fade-in-left');
+              } else if (element.tagName === 'H3') {
+                element.classList.add('animated', 'fade-in-right');
+              } else if (element.tagName === 'P') {
+                element.classList.add('animated', 'fade-in-up', 'animated-delay-1');
+              } else if (element.tagName === 'UL' || element.tagName === 'OL') {
+                element.classList.add('animated', 'fade-in-right', 'animated-delay-2');
+              } else if (element.tagName === 'BLOCKQUOTE') {
+                element.classList.add('animated', 'scale-in', 'animated-slow');
+              }
+              
+              // Stop observing this element
+              observer.unobserve(element);
+            }
+          });
+        }, { threshold: 0.1 }); // Trigger when at least 10% of the element is visible
+        
+        // Observe all elements
+        h1Elements.forEach(el => observer.observe(el));
+        h2Elements.forEach(el => observer.observe(el));
+        h3Elements.forEach(el => observer.observe(el));
+        paragraphs.forEach(el => observer.observe(el));
+        lists.forEach(el => observer.observe(el));
+        blockquotes.forEach(el => observer.observe(el));
+        
+        // Clean up the observer on unmount
+        return () => {
+          observer.disconnect();
+        };
+      };
+      
+      // Setup reading progress bar
+      const setupReadingProgressBar = () => {
+        // Create the progress bar container and bar if they don't exist
+        let progressContainer = document.querySelector('.reading-progress-container');
+        let progressBar = document.querySelector('.reading-progress-bar');
+        
+        if (!progressContainer) {
+          progressContainer = document.createElement('div');
+          progressContainer.classList.add('reading-progress-container');
+          document.body.appendChild(progressContainer);
+          
+          progressBar = document.createElement('div');
+          progressBar.classList.add('reading-progress-bar');
+          progressContainer.appendChild(progressBar);
+        }
+        
+        // Update progress bar width based on scroll position
+        const updateReadingProgress = () => {
+          const contentElement = document.querySelector('.learning-content-text');
+          if (!contentElement) return;
+          
+          const totalHeight = contentElement.scrollHeight;
+          const windowHeight = window.innerHeight;
+          const scrolled = window.scrollY;
+          
+          // Calculate how much of the content has been scrolled through
+          const scrollableHeight = totalHeight - windowHeight;
+          const progress = (scrolled / scrollableHeight) * 100;
+          
+          // Update progress bar width
+          if (progressBar) {
+            (progressBar as HTMLElement).style.width = `${Math.min(progress, 100)}%`;
+          }
+        };
+        
+        // Add scroll event listener
+        window.addEventListener('scroll', updateReadingProgress);
+        
+        // Initialize progress
+        updateReadingProgress();
+        
+        // Clean up
+        return () => {
+          window.removeEventListener('scroll', updateReadingProgress);
+          if (progressContainer && progressContainer.parentNode) {
+            progressContainer.parentNode.removeChild(progressContainer);
+          }
+        };
+      };
+      
+      // Wait a moment for the content to be fully rendered
+      const animationTimer = setTimeout(setupScrollAnimations, 500);
+      const progressTimer = setTimeout(setupReadingProgressBar, 300);
+      
+      return () => {
+        clearTimeout(animationTimer);
+        clearTimeout(progressTimer);
+      };
+    }
+  }, [view, activeTab]);
 
   return (
     <div className="app-layout">

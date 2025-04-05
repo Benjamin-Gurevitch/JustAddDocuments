@@ -7,18 +7,18 @@ function App() {
     <div className="app">
       <header className="header">
         <div className="header-content">
-          <h1>
-            <span>📄</span>
-            JAD
-          </h1>
+          <div className="logo-container">
+            <h1>
+              <span className="logo-text">Just<span className="highlight-text">Add</span>Documents</span>
+            </h1>
+          </div>
         </div>
       </header>
 
-      <main className="main-content">
-        <h2 className="section-title">Document Analysis with Claude</h2>
-        <p className="section-description">
-          Upload your PDF document and get an interactive analysis powered by Claude AI.
-        </p>
+      <main className="main-content full-width">
+        <div className="intro-section">
+          <p className="modern-intro">Upload your document to begin</p>
+        </div>
         <FileUpload />
       </main>
     </div>

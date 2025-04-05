@@ -6,6 +6,12 @@ interface FileUploadProps {
   acceptedTypes?: string[];
 }
 
+interface LearningTab {
+  id: string;
+  title: string;
+  content: string;
+}
+
 const FileUpload: React.FC<FileUploadProps> = ({
   maxSize = 32, // Default max size is 32MB for Claude
   acceptedTypes = ['application/pdf']
@@ -14,8 +20,12 @@ const FileUpload: React.FC<FileUploadProps> = ({
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string>('');
   const [loading, setLoading] = useState(false);
-  const [response, setResponse] = useState<string>('');
+  const [learningTabs, setLearningTabs] = useState<LearningTab[]>([]);
+  const [activeTab, setActiveTab] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Special view for upload form
+  const [view, setView] = useState<'upload' | 'content'>('upload');
 
   const formatFileSize = (bytes: number): string => {
     if (bytes === 0) return '0 Bytes';
@@ -91,19 +101,29 @@ const FileUpload: React.FC<FileUploadProps> = ({
     }
   }, []);
 
-  const handleUpload = () => {
+  const handleBeginLearning = () => {
     if (!file) return;
     
     setLoading(true);
     setError('');
-    setResponse('');
 
     // Use setTimeout to allow UI update before heavy work
     setTimeout(async () => {
       try {
         const base64Data = await convertToBase64(file);
         const result = await analyzeDocument(base64Data);
-        setResponse(result);
+        
+        // Create a new learning tab
+        const newTabId = Date.now().toString();
+        const newTab: LearningTab = {
+          id: newTabId,
+          title: file.name,
+          content: result
+        };
+        
+        setLearningTabs(prev => [...prev, newTab]);
+        setActiveTab(newTabId);
+        setView('content');
       } catch (error) {
         console.error('Upload error:', error);
         setError(error instanceof Error ? error.message : 'An error occurred while processing the document');
@@ -124,92 +144,140 @@ const FileUpload: React.FC<FileUploadProps> = ({
     return { __html: formattedText };
   };
 
+  const goToUpload = () => {
+    setView('upload');
+    setActiveTab(null);
+  };
+
   return (
-    <>
-      <div className="file-upload">
-        <div
-          className={`upload-area ${isDragging ? 'dragging' : ''} ${error ? 'error' : ''}`}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          onClick={() => fileInputRef.current?.click()}
+    <div className="app-layout">
+      {/* Global sidebar with tabs */}
+      <div className="global-sidebar">
+        <button 
+          className={`sidebar-upload-btn ${view === 'upload' ? 'active' : ''}`}
+          onClick={goToUpload}
         >
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={handleFileSelect}
-            accept={acceptedTypes.join(',')}
-            style={{ display: 'none' }}
-          />
-          <div className="upload-content">
-            {!file ? (
-              <>
-                <span className="upload-icon">📄</span>
-                <h3>Drop your document here</h3>
-                <p>or click to browse</p>
-                <span className="upload-info">PDF files up to {maxSize}MB</span>
-              </>
-            ) : (
-              <>
-                <span className="upload-icon">✓</span>
-                <h3>File selected</h3>
-              </>
+          <span className="sidebar-icon">📄</span>
+          <span className="tab-title">Upload</span>
+        </button>
+        
+        {learningTabs.length > 0 && (
+          <div className="sidebar-divider"></div>
+        )}
+        
+        <div className="global-tabs-list">
+          {learningTabs.map(tab => (
+            <button
+              key={tab.id}
+              className={`global-tab-button ${activeTab === tab.id ? 'active' : ''}`}
+              onClick={() => {
+                setActiveTab(tab.id);
+                setView('content');
+              }}
+              title={tab.title}
+            >
+              <span className="sidebar-icon">📝</span>
+              <span className="tab-title">{tab.title}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Main content area */}
+      <div className="main-area">
+        {view === 'upload' ? (
+          // Upload view
+          <div className="upload-view">
+            <div className="file-upload">
+              <div
+                className={`upload-area ${isDragging ? 'dragging' : ''} ${error ? 'error' : ''}`}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileSelect}
+                  accept={acceptedTypes.join(',')}
+                  style={{ display: 'none' }}
+                />
+                <div className="upload-content">
+                  {!file ? (
+                    <>
+                      <span className="upload-icon">📄</span>
+                      <h3>Drop your document here</h3>
+                      <p>or click to browse</p>
+                      <span className="upload-info">PDF files up to {maxSize}MB</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="upload-icon">✓</span>
+                      <h3>File selected</h3>
+                    </>
+                  )}
+                </div>
+              </div>
+              
+              {file && !error && (
+                <div className="file-info">
+                  <div className="file-details">
+                    <div className="file-icon">📄</div>
+                    <div className="file-details-content">
+                      <p>{file.name}</p>
+                      <span className="file-size">{formatFileSize(file.size)}</span>
+                    </div>
+                  </div>
+                  <button 
+                    className="upload-button" 
+                    onClick={handleBeginLearning}
+                    disabled={loading}
+                  >
+                    {loading ? (
+                      <>
+                        <div className="button-spinner" />
+                        Processing...
+                      </>
+                    ) : (
+                      <>
+                        <span className="button-icon">⚡</span>
+                        <span>Begin Learning</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+            </div>
+            
+            {error && (
+              <div className="error-message">
+                <div className="error-icon">⚠️</div>
+                <div>{error}</div>
+              </div>
             )}
           </div>
-        </div>
-        
-        {file && !error && !loading && (
-          <div className="file-info">
-            <div className="file-details">
-              <div className="file-icon">📄</div>
-              <div className="file-details-content">
-                <p>{file.name}</p>
-                <span className="file-size">{formatFileSize(file.size)}</span>
+        ) : (
+          // Content view
+          <div className="content-view">
+            {activeTab && (
+              <div className="learning-results">
+                <div className="learning-header">
+                  <div className="learning-icon">📝</div>
+                  <div className="learning-title">
+                    {learningTabs.find(tab => tab.id === activeTab)?.title}
+                  </div>
+                </div>
+                <div 
+                  className="learning-content-text" 
+                  dangerouslySetInnerHTML={formatResponse(learningTabs.find(tab => tab.id === activeTab)?.content || '')} 
+                />
               </div>
-            </div>
-            {!response && (
-              <button 
-                className="upload-button" 
-                onClick={handleUpload}
-                disabled={loading}
-              >
-                {loading ? (
-                  <>
-                    <div className="button-spinner" />
-                    Analyzing...
-                  </>
-                ) : (
-                  <>
-                    <span>📊</span>
-                    Analyze Document
-                  </>
-                )}
-              </button>
             )}
           </div>
         )}
       </div>
-      
-      {error && (
-        <div className="error-message">
-          <div className="error-icon">⚠️</div>
-          <div>{error}</div>
-        </div>
-      )}
-      
-      {response && (
-        <div className="analysis-results">
-          <div className="analysis-header">
-            <div className="analysis-icon">📊</div>
-            Analysis Results
-          </div>
-          <div 
-            className="analysis-content" 
-            dangerouslySetInnerHTML={formatResponse(response)} 
-          />
-        </div>
-      )}
-    </>
+    </div>
   );
 };
 

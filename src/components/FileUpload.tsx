@@ -1,5 +1,6 @@
-import React, { useState, useRef, useCallback } from 'react';
-import { analyzeDocument } from '../services/claude';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { analyzeDocument, generateVisualizations, extractVisualizationPlaceholders, generateVisualizationForPlaceholder, renameComponentToApp } from '../services/claude';
+import '../App.css';
 
 interface FileUploadProps {
   maxSize?: number; // in MB
@@ -10,7 +11,73 @@ interface LearningTab {
   id: string;
   title: string;
   content: string;
+  visualizations: Visualization[];
 }
+
+interface Visualization {
+  id: string;
+  description: string;
+  code: string;
+  status: 'loading' | 'ready' | 'error';
+  error?: string;
+}
+
+// Simple function to convert markdown to HTML without disrupting visualizations
+const markdownToHtml = (markdown: string): string => {
+  // Basic implementation of markdown to HTML conversion
+  let html = markdown;
+  
+  // Headers - match heading level (1-6) followed by space and text
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+  html = html.replace(/^##### (.+)$/gm, '<h5>$1</h5>');
+  html = html.replace(/^###### (.+)$/gm, '<h6>$1</h6>');
+  
+  // Lists
+  // - Unordered lists
+  html = html.replace(/^\* (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  
+  // Wrap adjacent list items in <ul> tags
+  html = html.replace(/(<li>.+<\/li>)\n(?=<li>)/g, '$1');
+  html = html.replace(/(<li>.+<\/li>)+/g, '<ul>$&</ul>');
+  
+  // - Ordered lists
+  html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+  
+  // Wrap adjacent ordered list items in <ol> tags
+  html = html.replace(/(<li>.+<\/li>)\n(?=<li>)/g, '$1');
+  html = html.replace(/(<li>.+<\/li>)+/g, '<ol>$&</ol>');
+  
+  // Bold
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/__(.+?)__/g, '<strong>$1</strong>');
+  
+  // Italic
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  html = html.replace(/_(.+?)_/g, '<em>$1</em>');
+  
+  // Code blocks
+  html = html.replace(/```([a-zA-Z]*)([\s\S]*?)```/g, 
+    '<div class="code-block"><div class="code-lang">$1</div><pre>$2</pre></div>');
+  
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  
+  // Paragraphs (lines that are not headers, lists, or code)
+  html = html.replace(/^(?!(#|<h|<ul|<ol|<div class="code-block"|<p)).+$/gm, '<p>$&</p>');
+  
+  // Fix any doubled paragraph tags
+  html = html.replace(/<p><p>/g, '<p>');
+  html = html.replace(/<\/p><\/p>/g, '</p>');
+  
+  // Convert newlines to <br> within paragraphs
+  html = html.replace(/(.+)\n(?!<\/?[a-z]|$)/g, '$1<br>');
+  
+  return html;
+};
 
 const FileUpload: React.FC<FileUploadProps> = ({
   maxSize = 32, // Default max size is 32MB for Claude
@@ -23,9 +90,305 @@ const FileUpload: React.FC<FileUploadProps> = ({
   const [learningTabs, setLearningTabs] = useState<LearningTab[]>([]);
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const visualizationContainerRef = useRef<HTMLDivElement>(null);
 
-  // Special view for upload form
-  const [view, setView] = useState<'upload' | 'content'>('upload');
+  // Special view for upload form or content
+  const [view, setView] = useState<'upload' | 'content' | 'visualization'>('upload');
+
+  // Add a debug mode state
+  const [debugMode, setDebugMode] = useState<boolean>(false);
+
+  // Store generated visualization code as components
+  useEffect(() => {
+    // This effect will be used to render visualization code
+    if (view === 'visualization' && activeTab) {
+      const tab = learningTabs.find(t => t.id === activeTab);
+      if (tab) {
+        tab.visualizations.forEach(visualization => {
+          if (visualization.status === 'ready' && visualization.code) {
+            const containerId = `vis-container-${visualization.id}`;
+            const container = document.getElementById(containerId);
+            
+            if (container) {
+              // Clear previous content
+              while (container.firstChild) {
+                container.removeChild(container.firstChild);
+              }
+              
+              try {
+                // Create a sandboxed iframe for rendering the React component
+                const iframe = document.createElement('iframe');
+                iframe.style.width = '100%';
+                iframe.style.height = '500px';
+                iframe.style.border = 'none';
+                iframe.style.borderRadius = '8px';
+                iframe.style.backgroundColor = 'white';
+                iframe.title = 'Visualization';
+                
+                container.appendChild(iframe);
+                
+                // Wait for iframe to load then inject the visualization
+                iframe.onload = () => {
+                  if (iframe.contentDocument) {
+                    // Get the raw code 
+                    const rawCode = visualization.code || '';
+                    
+                    // Apply the renaming function to ensure the component is named 'App'
+                    const transformedCode = renameComponentToApp(rawCode);
+                    
+                    // Create HTML content with necessary libraries
+                    const htmlContent = `
+                      <!DOCTYPE html>
+                      <html>
+                      <head>
+                        <meta charset="utf-8">
+                        <title>Visualization</title>
+                        
+                        <!-- Add React and visualization libraries -->
+                        <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+                        <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+                        <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+                        <script src="https://cdn.jsdelivr.net/npm/d3@7.8.5/dist/d3.min.js"></script>
+                        <script src="https://unpkg.com/recharts@2.10.3/dist/Recharts.js"></script>
+                        <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
+                        
+                        <!-- Add react-chartjs-2 components -->
+                        <script>
+                          window.reactChartjs2 = {};
+                          
+                          // Create mock components for react-chartjs-2
+                          ['Bar', 'Line', 'Pie', 'Doughnut', 'PolarArea', 'Radar', 'Scatter', 'Bubble'].forEach(chartType => {
+                            window.reactChartjs2[chartType] = function(props) {
+                              const canvasRef = React.useRef(null);
+                              
+                              React.useEffect(() => {
+                                if (canvasRef.current) {
+                                  const ctx = canvasRef.current.getContext('2d');
+                                  new Chart(ctx, {
+                                    type: chartType.toLowerCase(),
+                                    data: props.data,
+                                    options: props.options
+                                  });
+                                }
+                              }, [props.data, props.options]);
+                              
+                              return React.createElement('canvas', {
+                                ref: canvasRef,
+                                style: { maxHeight: '400px' }
+                              });
+                            };
+                          });
+                        </script>
+                        
+                        <!-- Add Babel for JSX transpilation -->
+                        <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+                        
+                        <style>
+                          body {
+                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+                            margin: 0;
+                            padding: 20px;
+                            background-color: white;
+                          }
+                          #root {
+                            width: 100%;
+                          }
+                          /* Ensure charts are responsive */
+                          canvas, svg {
+                            max-width: 100%;
+                          }
+                          .error-display {
+                            color: #ef4444;
+                            padding: 20px;
+                            border: 1px solid #fecaca;
+                            border-radius: 8px;
+                            background-color: #fef2f2;
+                            margin-bottom: 20px;
+                          }
+                        </style>
+                      </head>
+                      <body>
+                        <div id="root"></div>
+                        
+                        <script>
+                          // Make visualization libraries available as globals
+                          window.React = React;
+                          window.ReactDOM = ReactDOM;
+                          window.Chart = Chart;
+                          window.d3 = d3;
+                          
+                          // Add sample data in case the component needs it
+                          window.sampleData = {
+                            labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
+                            datasets: [{
+                              label: 'Sample Data',
+                              data: [12, 19, 3, 5, 2, 3],
+                              backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                              borderColor: 'rgba(75, 192, 192, 1)',
+                              borderWidth: 1
+                            }]
+                          };
+                        </script>
+                        
+                        <script type="text/babel" data-type="module">
+                        // Make library components available in scope
+                        const { Bar, Line, Pie, Doughnut, PolarArea, Radar, Scatter, Bubble } = window.reactChartjs2;
+                        
+                        // Define the visualization component
+                        try {
+                          // The user's code
+                          ${transformedCode}
+                          
+                          const container = document.getElementById('root');
+                          const root = ReactDOM.createRoot(container); 
+
+                          // Try to render the component
+                          let ComponentToRender = null;
+                          
+                          // DEFENSE: Explicitly check and protect against problematic components
+                          // Capture global objects before and after code evaluation to find new components
+                          const safeComponentSearch = () => {
+                            // Explicitly check for App first - our preferred component
+                            if (typeof App === 'function') {
+                              // Additional safety check - make sure it's not a class constructor
+                              if (App.prototype && App.prototype.isReactComponent) {
+                                // It's a class component - need to make sure to use 'new'
+                                return (props) => new App(props);
+                              }
+                              return App;
+                            }
+                              
+                            // Check for any custom component EXCEPT "An" (which causes issues)
+                            for (const key in window) {
+                              if (key !== 'An' && // Explicitly exclude "An" component
+                                  typeof window[key] === 'function' && 
+                                  /^[A-Z]/.test(key) && 
+                                  key !== 'React' && 
+                                  key !== 'ReactDOM' &&
+                                  key !== 'Chart') {
+                                  
+                                // Additional safety check for class components
+                                if (window[key].prototype && window[key].prototype.isReactComponent) {
+                                  // It's a class component - wrap it with proper instantiation
+                                  return (props) => new window[key](props);
+                                }
+                                
+                                return window[key];
+                              }
+                            }
+                            
+                            return null;
+                          };
+                          
+                          ComponentToRender = safeComponentSearch();
+                          
+                          if (ComponentToRender) {
+                            try {
+                              // Create a simple wrapper component for additional safety
+                              const SafeWrapper = (props) => {
+                                try {
+                                  const element = React.createElement(ComponentToRender, props);
+                                  return React.createElement('div', { style: { width: '100%', height: '100%' } }, element);
+                                } catch (error) {
+                                  console.error("Error creating element:", error);
+                                  return React.createElement('div', { className: 'error-display' },
+                                    React.createElement('h3', null, 'Error Creating Visualization'),
+                                    React.createElement('p', null, error.message),
+                                    React.createElement('p', null, 'Check the browser console for more details.')
+                                  );
+                                }
+                              };
+                              
+                              // Render with sample data props using createRoot
+                              root.render(React.createElement(SafeWrapper, { data: window.sampleData }));
+                            } catch (propsError) {
+                              console.error("Error during render with props:", propsError);
+                              try {
+                                // Try rendering without props using createRoot
+                                root.render(React.createElement('div', null, 
+                                  React.createElement('p', null, 'Falling back to basic rendering...'),
+                                  React.createElement(ComponentToRender)
+                                ));
+                              } catch (finalError) {
+                                document.getElementById('root').innerHTML = 
+                                  '<div class="error-display">' +
+                                  '<h3 style="margin-top: 0;">Error Rendering Visualization</h3>' +
+                                  '<p>' + finalError.message + '</p>' +
+                                  '<p>Check the browser console for more details.</p>' +
+                                  '</div>';
+                              }
+                            }
+                          } else {
+                            // If we couldn't find a suitable component, create a generic visualization
+                            // using Chart.js directly as a fallback
+                            const canvas = document.createElement('canvas');
+                            document.getElementById('root').appendChild(canvas);
+                            const ctx = canvas.getContext('2d');
+                            
+                            // Create a basic chart
+                            new Chart(ctx, {
+                              type: 'line',
+                              data: {
+                                labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
+                                datasets: [{
+                                  label: 'Generated Visualization',
+                                  data: [12, 19, 3, 5, 2, 3],
+                                  borderColor: 'rgb(75, 192, 192)',
+                                  tension: 0.1
+                                }]
+                              },
+                              options: {
+                                responsive: true
+                              }
+                            });
+                            
+                            document.getElementById('root').appendChild(
+                              document.createElement('div')
+                            ).innerHTML = '<p style="color: #666; margin-top: 10px;">Note: Used fallback rendering because no valid React component was found.</p>';
+                          }
+                        } catch (error) {
+                          console.error('Visualization render error:', error);
+                          
+                          document.getElementById('root').innerHTML = 
+                            '<div class="error-display">' +
+                            '<h3 style="margin-top: 0;">Error Rendering Visualization</h3>' +
+                            '<p>' + error.message + '</p>' +
+                            '<p>Check the browser console for more details.</p>' +
+                            '</div>';
+                        }
+                        </script>
+                      </body>
+                      </html>
+                    `;
+                    
+                    iframe.contentDocument.open();
+                    iframe.contentDocument.write(htmlContent);
+                    iframe.contentDocument.close();
+                  }
+                };
+                
+                iframe.src = 'about:blank';
+              } catch (error) {
+                console.error('Error setting up visualization:', error);
+                if (visualizationContainerRef.current) {
+                  visualizationContainerRef.current.innerHTML = `
+                    <div class="error-message">
+                      <div className="error-icon">⚠️</div>
+                      <div>
+                        <h3>Error Setting Up Visualization</h3>
+                        <p>${error instanceof Error ? error.message : 'Unknown error'}</p>
+                        <p>Check the browser console for more details.</p>
+                      </div>
+                    </div>
+                  `;
+                }
+              }
+            }
+          }
+        });
+      }
+    }
+  }, [view, activeTab, learningTabs]);
 
   const formatFileSize = (bytes: number): string => {
     if (bytes === 0) return '0 Bytes';
@@ -111,34 +474,92 @@ const FileUpload: React.FC<FileUploadProps> = ({
     setTimeout(async () => {
       try {
         const base64Data = await convertToBase64(file);
-        const result = await analyzeDocument(base64Data);
+        
+        // Generate paper and visualizations in a single API call
+        const { paperContent, visualizations: extractedVisualizations } = await analyzeDocument(base64Data);
+        
+        // Process the extracted visualizations
+        const processedVisualizations = extractedVisualizations.map(vis => ({
+          ...vis,
+          status: 'ready' as const
+        }));
         
         // Create a new learning tab
         const newTabId = Date.now().toString();
         const newTab: LearningTab = {
           id: newTabId,
           title: file.name,
-          content: result
+          content: paperContent,
+          visualizations: processedVisualizations
         };
         
         setLearningTabs(prev => [...prev, newTab]);
         setActiveTab(newTabId);
         setView('content');
+        
+        // Reset file so when returning to upload view it shows the default state
+        setFile(null);
       } catch (error) {
         console.error('Upload error:', error);
         setError(error instanceof Error ? error.message : 'An error occurred while processing the document');
       } finally {
         setLoading(false);
       }
-    }, 0); // 0ms delay yields to the event loop
+    }, 0);
   };
 
-  const formatResponse = (text: string) => {
-    // Format code blocks
-    const formattedText = text.replace(
-      /```([a-zA-Z]*)([\s\S]*?)```/g, 
-      '<div class="code-block"><div class="code-lang">$1</div><pre>$2</pre></div>'
-    );
+  // Replace the original formatResponse function with a simplified version that preserves visualizations
+  const formatResponse = (text: string, visualizations: Visualization[]) => {
+    // First apply markdown formatting
+    let formattedText = markdownToHtml(text);
+    
+    // Then handle visualization placeholders
+    visualizations.forEach(visualization => {
+      const placeholderTag = `{{VISUALIZATION:${visualization.id}:${visualization.description}}}`;
+      let replacementHtml = '';
+      
+      if (visualization.status === 'loading') {
+        replacementHtml = `<div class="visualization-placeholder loading">
+          <h4>Visualization: ${visualization.description}</h4>
+          <div class="placeholder-status">
+            <div className="spinner"></div>
+            <span>Loading visualization...</span>
+          </div>
+        </div>`;
+      } else if (visualization.status === 'error') {
+        replacementHtml = `<div class="visualization-placeholder error">
+          <h4>Visualization: ${visualization.description}</h4>
+          <div class="placeholder-status error">
+            <div className="error-icon">⚠️</div>
+            <div>Error: ${visualization.error || 'Failed to load visualization'}</div>
+          </div>
+        </div>`;
+      } else if (visualization.status === 'ready') {
+        // Create a unique ID for this visualization container
+        const visContainerId = `vis-container-${visualization.id}`;
+        
+        // Escape the code for safe HTML display
+        const escapedCode = visualization.code
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#039;");
+
+        // We'll inject the visualization into this container using the iframe approach
+        // AND add a <pre> tag to display the raw code underneath
+        replacementHtml = `<div class="visualization-placeholder ready">
+          <h4>Visualization: ${visualization.description}</h4>
+          <div id="${visContainerId}" class="embedded-visualization-container" data-code="${encodeURIComponent(visualization.code)}"></div>
+          <details>
+            <summary>Show Code</summary>
+            <pre style="background-color: #f0f0f0; padding: 10px; border-radius: 4px; overflow-x: auto; max-height: 300px;">${escapedCode}</pre>
+          </details>
+        </div>`;
+      }
+      
+      formattedText = formattedText.replace(placeholderTag, replacementHtml);
+    });
     
     // Add safety for direct rendering
     return { __html: formattedText };
@@ -148,6 +569,298 @@ const FileUpload: React.FC<FileUploadProps> = ({
     setView('upload');
     setActiveTab(null);
   };
+  
+  const goToVisualization = (visId: string) => {
+    setView('visualization');
+  };
+
+  // This effect renders embedded visualizations after the content is displayed
+  useEffect(() => {
+    if (view === 'content' && activeTab) {
+      const tab = learningTabs.find(t => t.id === activeTab);
+      if (tab) {
+        tab.visualizations.forEach(visualization => {
+          if (visualization.status === 'ready' && visualization.code) {
+            const containerId = `vis-container-${visualization.id}`;
+            const container = document.getElementById(containerId);
+            
+            if (container) {
+              // Clear previous content
+              while (container.firstChild) {
+                container.removeChild(container.firstChild);
+              }
+              
+              try {
+                // Create a sandboxed iframe for rendering the React component
+                const iframe = document.createElement('iframe');
+                iframe.style.width = '100%';
+                iframe.style.height = '400px';
+                iframe.style.border = 'none';
+                iframe.style.borderRadius = '8px';
+                iframe.style.backgroundColor = 'white';
+                iframe.title = `Visualization: ${visualization.description}`;
+                
+                container.appendChild(iframe);
+                
+                // Wait for iframe to load then inject the visualization
+                iframe.onload = () => {
+                  if (iframe.contentDocument) {
+                    // Get the raw code 
+                    const rawCode = visualization.code || '';
+                    
+                    // Apply the renaming function to ensure the component is named 'App'
+                    const transformedCode = renameComponentToApp(rawCode);
+                    
+                    // Create HTML content with necessary libraries
+                    const htmlContent = `
+                      <!DOCTYPE html>
+                      <html>
+                      <head>
+                        <meta charset="utf-8">
+                        <title>Visualization</title>
+                        
+                        <!-- Add React and visualization libraries -->
+                        <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+                        <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+                        <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+                        <script src="https://cdn.jsdelivr.net/npm/d3@7.8.5/dist/d3.min.js"></script>
+                        <script src="https://unpkg.com/recharts@2.10.3/dist/Recharts.js"></script>
+                        <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
+                        
+                        <!-- Add react-chartjs-2 components -->
+                        <script>
+                          window.reactChartjs2 = {};
+                          
+                          // Create mock components for react-chartjs-2
+                          ['Bar', 'Line', 'Pie', 'Doughnut', 'PolarArea', 'Radar', 'Scatter', 'Bubble'].forEach(chartType => {
+                            window.reactChartjs2[chartType] = function(props) {
+                              const canvasRef = React.useRef(null);
+                              
+                              React.useEffect(() => {
+                                if (canvasRef.current) {
+                                  const ctx = canvasRef.current.getContext('2d');
+                                  new Chart(ctx, {
+                                    type: chartType.toLowerCase(),
+                                    data: props.data,
+                                    options: props.options
+                                  });
+                                }
+                              }, [props.data, props.options]);
+                              
+                              return React.createElement('canvas', {
+                                ref: canvasRef,
+                                style: { maxHeight: '400px' }
+                              });
+                            };
+                          });
+                        </script>
+                        
+                        <!-- Add Babel for JSX transpilation -->
+                        <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+                        
+                        <style>
+                          body {
+                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+                            margin: 0;
+                            padding: 20px;
+                            background-color: white;
+                          }
+                          #root {
+                            width: 100%;
+                          }
+                          /* Ensure charts are responsive */
+                          canvas, svg {
+                            max-width: 100%;
+                          }
+                          .error-display {
+                            color: #ef4444;
+                            padding: 20px;
+                            border: 1px solid #fecaca;
+                            border-radius: 8px;
+                            background-color: #fef2f2;
+                            margin-bottom: 20px;
+                          }
+                        </style>
+                      </head>
+                      <body>
+                        <div id="root"></div>
+                        
+                        <script>
+                          // Make visualization libraries available as globals
+                          window.React = React;
+                          window.ReactDOM = ReactDOM;
+                          window.Chart = Chart;
+                          window.d3 = d3;
+                          
+                          // Add sample data in case the component needs it
+                          window.sampleData = {
+                            labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
+                            datasets: [{
+                              label: 'Sample Data',
+                              data: [12, 19, 3, 5, 2, 3],
+                              backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                              borderColor: 'rgba(75, 192, 192, 1)',
+                              borderWidth: 1
+                            }]
+                          };
+                        </script>
+                        
+                        <script type="text/babel" data-type="module">
+                        // Make library components available in scope
+                        const { Bar, Line, Pie, Doughnut, PolarArea, Radar, Scatter, Bubble } = window.reactChartjs2;
+                        
+                        // Define the visualization component
+                        try {
+                          // The user's code
+                          ${transformedCode}
+                          
+                          const container = document.getElementById('root');
+                          const root = ReactDOM.createRoot(container); 
+
+                          // Try to render the component
+                          let ComponentToRender = null;
+                          
+                          // DEFENSE: Explicitly check and protect against problematic components
+                          // Capture global objects before and after code evaluation to find new components
+                          const safeComponentSearch = () => {
+                            // Explicitly check for App first - our preferred component
+                            if (typeof App === 'function') {
+                              // Additional safety check - make sure it's not a class constructor
+                              if (App.prototype && App.prototype.isReactComponent) {
+                                // It's a class component - need to make sure to use 'new'
+                                return (props) => new App(props);
+                              }
+                              return App;
+                            }
+                              
+                            // Check for any custom component EXCEPT "An" (which causes issues)
+                            for (const key in window) {
+                              if (key !== 'An' && // Explicitly exclude "An" component
+                                  typeof window[key] === 'function' && 
+                                  /^[A-Z]/.test(key) && 
+                                  key !== 'React' && 
+                                  key !== 'ReactDOM' &&
+                                  key !== 'Chart') {
+                                  
+                                // Additional safety check for class components
+                                if (window[key].prototype && window[key].prototype.isReactComponent) {
+                                  // It's a class component - wrap it with proper instantiation
+                                  return (props) => new window[key](props);
+                                }
+                                
+                                return window[key];
+                              }
+                            }
+                            
+                            return null;
+                          };
+                          
+                          ComponentToRender = safeComponentSearch();
+                          
+                          if (ComponentToRender) {
+                            try {
+                              // Create a simple wrapper component for additional safety
+                              const SafeWrapper = (props) => {
+                                try {
+                                  const element = React.createElement(ComponentToRender, props);
+                                  return React.createElement('div', { style: { width: '100%', height: '100%' } }, element);
+                                } catch (error) {
+                                  console.error("Error creating element:", error);
+                                  return React.createElement('div', { className: 'error-display' },
+                                    React.createElement('h3', null, 'Error Creating Visualization'),
+                                    React.createElement('p', null, error.message),
+                                    React.createElement('p', null, 'Check the browser console for more details.')
+                                  );
+                                }
+                              };
+                              
+                              // Render with sample data props using createRoot
+                              root.render(React.createElement(SafeWrapper, { data: window.sampleData }));
+                            } catch (propsError) {
+                              console.error("Error during render with props:", propsError);
+                              try {
+                                // Try rendering without props using createRoot
+                                root.render(React.createElement('div', null, 
+                                  React.createElement('p', null, 'Falling back to basic rendering...'),
+                                  React.createElement(ComponentToRender)
+                                ));
+                              } catch (finalError) {
+                                document.getElementById('root').innerHTML = 
+                                  '<div class="error-display">' +
+                                  '<h3 style="margin-top: 0;">Error Rendering Visualization</h3>' +
+                                  '<p>' + finalError.message + '</p>' +
+                                  '<p>Check the browser console for more details.</p>' +
+                                  '</div>';
+                              }
+                            }
+                          } else {
+                            // If we couldn't find a suitable component, create a generic visualization
+                            // using Chart.js directly as a fallback
+                            const canvas = document.createElement('canvas');
+                            document.getElementById('root').appendChild(canvas);
+                            const ctx = canvas.getContext('2d');
+                            
+                            // Create a basic chart
+                            new Chart(ctx, {
+                              type: 'line',
+                              data: {
+                                labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
+                                datasets: [{
+                                  label: 'Generated Visualization',
+                                  data: [12, 19, 3, 5, 2, 3],
+                                  borderColor: 'rgb(75, 192, 192)',
+                                  tension: 0.1
+                                }]
+                              },
+                              options: {
+                                responsive: true
+                              }
+                            });
+                            
+                            document.getElementById('root').appendChild(
+                              document.createElement('div')
+                            ).innerHTML = '<p style="color: #666; margin-top: 10px;">Note: Used fallback rendering because no valid React component was found.</p>';
+                          }
+                        } catch (error) {
+                          console.error('Visualization render error:', error);
+                          
+                          document.getElementById('root').innerHTML = 
+                            '<div class="error-display">' +
+                            '<h3 style="margin-top: 0;">Error Rendering Visualization</h3>' +
+                            '<p>' + error.message + '</p>' +
+                            '<p>Check the browser console for more details.</p>' +
+                            '</div>';
+                        }
+                        </script>
+                      </body>
+                      </html>
+                    `;
+                    
+                    iframe.contentDocument.open();
+                    iframe.contentDocument.write(htmlContent);
+                    iframe.contentDocument.close();
+                  }
+                };
+                
+                iframe.src = 'about:blank';
+              } catch (error) {
+                console.error('Error setting up embedded visualization:', error);
+                container.innerHTML = `
+                  <div class="error-message">
+                    <div class="error-icon">⚠️</div>
+                    <div>
+                      <h3>Error Setting Up Visualization</h3>
+                      <p>${error instanceof Error ? error.message : 'Unknown error'}</p>
+                    </div>
+                  </div>
+                `;
+              }
+            }
+          }
+        });
+      }
+    }
+  }, [view, activeTab, learningTabs]);
 
   return (
     <div className="app-layout">
@@ -167,18 +880,19 @@ const FileUpload: React.FC<FileUploadProps> = ({
         
         <div className="global-tabs-list">
           {learningTabs.map(tab => (
-            <button
-              key={tab.id}
-              className={`global-tab-button ${activeTab === tab.id ? 'active' : ''}`}
-              onClick={() => {
-                setActiveTab(tab.id);
-                setView('content');
-              }}
-              title={tab.title}
-            >
-              <span className="sidebar-icon">📝</span>
-              <span className="tab-title">{tab.title}</span>
-            </button>
+            <React.Fragment key={tab.id}>
+              <button
+                className={`global-tab-button ${activeTab === tab.id && view === 'content' ? 'active' : ''}`}
+                onClick={() => {
+                  setActiveTab(tab.id);
+                  setView('content');
+                }}
+                title={tab.title}
+              >
+                <span className="sidebar-icon">📝</span>
+                <span className="tab-title">{tab.title}</span>
+              </button>
+            </React.Fragment>
           ))}
         </div>
       </div>
@@ -188,6 +902,9 @@ const FileUpload: React.FC<FileUploadProps> = ({
         {view === 'upload' ? (
           // Upload view
           <div className="upload-view">
+            <div className="upload-intro">
+              <p className="modern-intro">Upload your document to begin</p>
+            </div>
             <div className="file-upload">
               <div
                 className={`upload-area ${isDragging ? 'dragging' : ''} ${error ? 'error' : ''}`}
@@ -257,7 +974,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
               </div>
             )}
           </div>
-        ) : (
+        ) : view === 'content' ? (
           // Content view
           <div className="content-view">
             {activeTab && (
@@ -270,8 +987,100 @@ const FileUpload: React.FC<FileUploadProps> = ({
                 </div>
                 <div 
                   className="learning-content-text" 
-                  dangerouslySetInnerHTML={formatResponse(learningTabs.find(tab => tab.id === activeTab)?.content || '')} 
+                  dangerouslySetInnerHTML={formatResponse(
+                    learningTabs.find(tab => tab.id === activeTab)?.content || '',
+                    learningTabs.find(tab => tab.id === activeTab)?.visualizations || []
+                  )} 
                 />
+              </div>
+            )}
+          </div>
+        ) : (
+          // Visualization view
+          <div className="visualization-view">
+            {activeTab && (
+              <div className="visualization-container">
+                <div className="visualization-header">
+                  <div className="visualization-icon">📊</div>
+                  <div className="visualization-title">
+                    {learningTabs.find(tab => tab.id === activeTab)?.title}
+                  </div>
+                  
+                  <div className="visualization-controls">
+                    {/* Button to go back to document */}
+                    <button 
+                      className="back-to-document-button"
+                      onClick={() => {
+                        const tab = learningTabs.find(t => t.id === activeTab);
+                        if (tab) {
+                          setActiveTab(null);
+                          setView('content');
+                        }
+                      }}
+                    >
+                      <span className="button-icon">📝</span>
+                      <span>Back to Document</span>
+                    </button>
+                  </div>
+                </div>
+                
+                {/* Container for rendered visualizations */}
+                <div className="visualization-content">
+                  {(() => {
+                    const tab = learningTabs.find(t => t.id === activeTab);
+                    if (tab) {
+                      return (
+                        <>
+                          {tab.visualizations.map(visualization => (
+                            <div 
+                              key={visualization.id}
+                              className="visualization-item"
+                            >
+                              <div className="visualization-header">
+                                <div className="visualization-icon">📊</div>
+                                <div className="visualization-title">
+                                  {visualization.description}
+                                </div>
+                              </div>
+                              <div className="visualization-content">
+                                {(() => {
+                                  if (visualization.status === 'loading') {
+                                    return (
+                                      <div className="visualization-loading">
+                                        <div className="spinner"></div>
+                                        <p>Loading visualization...</p>
+                                      </div>
+                                    );
+                                  } else if (visualization.status === 'error') {
+                                    return (
+                                      <div className="visualization-error">
+                                        <div className="error-icon">⚠️</div>
+                                        <div>
+                                          <h3>Visualization Error</h3>
+                                          <p>{visualization.error || 'Failed to load visualization'}</p>
+                                        </div>
+                                      </div>
+                                    );
+                                  } else {
+                                    return (
+                                      <div 
+                                        ref={visualizationContainerRef}
+                                        id={`visualization-container-${visualization.id}`}
+                                        className="embedded-visualization-container"
+                                        data-code={encodeURIComponent(visualization.code)}
+                                      />
+                                    );
+                                  }
+                                })()}
+                              </div>
+                            </div>
+                          ))}
+                        </>
+                      );
+                    }
+                    return null;
+                  })()}
+                </div>
               </div>
             )}
           </div>

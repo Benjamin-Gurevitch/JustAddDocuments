@@ -16,9 +16,6 @@ function App() {
       </header>
 
       <main className="main-content full-width">
-        <div className="intro-section">
-          <p className="modern-intro">Upload your document to begin</p>
-        </div>
         <FileUpload />
       </main>
     </div>

@@ -46,10 +46,10 @@ Please create a comprehensive educational explanation of [SUBJECT/PDF] to help s
 1. Be EXHAUSTIVE and cover ALL material thoroughly
 2. Use proper Markdown formatting throughout - ensure all content is valid markdown
 3. Include helpful visualizations/quizzes where appropriate
-4. MAKE A LOT OF QUIZZES PLEASE WE NEED QUIZZES. The quiz types should be dependent on the subject matter. 
-5. ALSO MAKE SURE THEY DISPLAY THE ANSWERS AFTER THE USER ANSWERS THE QUIZ. MAKE SURE THEY CAN BE REPEATED MULTIPLE TIMES. 
-6. Visualizations and Quizzes should be extremely frequent and helpful and visually appealing, use bubbly animations and colors.
-7. Make sure the visualizations and quizzes are actually helpful and relevant to the material.  MAKE THEM VERY VEYR VERY INTERACTIVE , OR ELSE YOU WILL BE FIRED AND YOUR MOM WILL GET EXTREMELY SAD.
+4. MAKE A LOT OF QUIZZES PLEASE WE NEED QUIZZES. The quiz types should be dependent on the subject matter. EVERY QUIZ MUST BE INTERACTIVE - NO STATIC TEXT QUIZZES ALLOWED.
+5. ALSO MAKE SURE THEY DISPLAY THE ANSWERS AFTER THE USER ANSWERS THE QUIZ. MAKE SURE THEY CAN BE REPEATED MULTIPLE TIMES. EVERY QUIZ MUST HAVE A RESET/RETRY BUTTON.
+6. Visualizations and Quizzes should be extremely frequent and helpful and visually appealing, use bubbly animations and colors. EVERY SINGLE VISUALIZATION MUST BE INTERACTIVE IN SOME WAY - NO STATIC IMAGES OR CHARTS ALLOWED.
+7. Make sure the visualizations and quizzes are actually helpful and relevant to the material. MAKE THEM VERY VERY VERY INTERACTIVE, OR ELSE YOU WILL BE FIRED AND YOUR MOM WILL GET EXTREMELY SAD. EVERY VISUALIZATION MUST HAVE AT LEAST TWO WAYS THE USER CAN INTERACT WITH IT (e.g. clicking, dragging, hovering, inputting values, etc).
 8. Make sure the size of the visualization/quiz is appropriate for the content it is displaying, no scrollbars. Never have them in plain text without a window.
 
 Format your response as follows:
@@ -312,9 +312,9 @@ export const generateVisualizationForPlaceholder = async (
     `INSTRUCTIONS: Create a INTERACTIVE visualization OR INTERACTIVE QUIZ for the following description: "${description}". YOUR RESPONSE MUST CONTAIN ONLY CODE, NO TEXT.
 
     CRITICAL REQUIREMENTS:
-    0. Number one priority: interactive.
-    1. Make sure the visualization is interactive and visually appealing, use bubbly animations and colors. IT MUST BE INTERACTIVE OR ELSE YOU WILL BE FIRED AND YOUR MOM WILL GET EXTREMELY SAD.
-    2. 4. MAKE A LOT OF QUIZZES PLEASE WE NEED QUIZZES. ABOUT HALF SHOULD BE QUIZZES.!!! ALSO MAKE SURE THEY DISPLAY THE ANSWERS AFTER THE USER ANSWERS THE QUIZ. MAKE SURE THEY CAN BE REPEATED MULTIPLE TIMES.
+    0. Number one priority: EVERY visualization MUST be interactive - NO STATIC VISUALIZATIONS ALLOWED.
+    1. Make sure the visualization is interactive and visually appealing, use bubbly animations and colors. IT MUST BE INTERACTIVE OR ELSE YOU WILL BE FIRED AND YOUR MOM WILL GET EXTREMELY SAD. EVERY visualization MUST have AT LEAST TWO ways for users to interact with it (e.g. clicking, dragging, hovering, inputting values, etc).
+    2. MAKE A LOT OF QUIZZES PLEASE WE NEED QUIZZES. ABOUT HALF SHOULD BE QUIZZES.!!! ALSO MAKE SURE THEY DISPLAY THE ANSWERS AFTER THE USER ANSWERS THE QUIZ. MAKE SURE THEY CAN BE REPEATED MULTIPLE TIMES. EVERY QUIZ MUST HAVE A RESET/RETRY BUTTON.
     3. You MUST name your component 'App' - NEVER use any other name. It MUST be a JavaScript function named exactly 'App'. Example: function App() { const [count, setCount] = React.useState(0); return <div>{count}</div>; }
     4. DO NOT use import or export statements - they won't work in the browser environment
     5. When using React hooks (like useState, useEffect, useRef), access them via the global React object (e.g., 'React.useState', 'React.useEffect', 'React.useRef').
@@ -343,6 +343,7 @@ export const generateVisualizationForPlaceholder = async (
     11. Do not include ReactDOM.render() calls
     12. Use ONLY standard built-in JavaScript functions and objects (like Math.pow, Math.sqrt). DO NOT use non-standard functions like Math.erf.
     13. Quizzes/Visualizations should be in a window.
+    14. EVERY visualization MUST be interactive - this is not optional. If you create a static visualization, you will be fired and your mom will get extremely sad.
 
      If you make the function not called App, it will not work. PLEASEEE DONTTTT
     Available globally: React, ReactDOM, Chart, d3`;

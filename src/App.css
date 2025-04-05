@@ -77,6 +77,7 @@ body {
   background: linear-gradient(135deg, #334155, #475569);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+  padding-left: 30px;
 }
 
 .highlight-text {
@@ -943,11 +944,11 @@ body {
   min-width: 0;
 }
 
-.upload-view, 
-.content-view {
+.upload-view{
   width: 100%;
-  max-width: 800px;
+  max-width: 1000px;
   margin: 0 auto;
+  padding-right: 12.5%;
 }
 
 .content-view {

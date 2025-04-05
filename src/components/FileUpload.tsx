@@ -1,6 +1,15 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { analyzeDocument, generateVisualizations, extractVisualizationPlaceholders, generateVisualizationForPlaceholder, renameComponentToApp } from '../services/claude';
+import { fetchRelatedLinks } from '../services/openperplex';
 import '../App.css';
+import ChatBot from './ChatBot';
+
+// At the beginning of the file, add the API key as a global variable
+// This is not ideal for production, but it works for this demo
+// In a real application, environment variables should be used
+if (typeof window !== 'undefined') {
+  (window as any).OPENPERPLEX_API_KEY = 'wYQNMx0GcR92HtTL_2dCS_s-nE7B4UI1QtaYiqIuwl0';
+}
 
 interface FileUploadProps {
   maxSize?: number; // in MB
@@ -78,6 +87,139 @@ const markdownToHtml = (markdown: string): string => {
   html = html.replace(/(.+)\n(?!<\/?[a-z]|$)/g, '$1<br>');
   
   return html;
+};
+
+// Component for the dark mode toggle
+const ThemeToggle: React.FC = () => {
+  const [isDark, setIsDark] = useState(() => {
+    // Check if theme is stored in localStorage
+    const storedTheme = localStorage.getItem('theme');
+    return storedTheme === 'dark';
+  });
+
+  useEffect(() => {
+    // Set initial theme based on localStorage or user preference
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const storedTheme = localStorage.getItem('theme');
+    
+    if (storedTheme) {
+      document.documentElement.setAttribute('data-theme', storedTheme);
+      setIsDark(storedTheme === 'dark');
+    } else if (prefersDark) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+      setIsDark(true);
+    }
+  }, []);
+
+  const toggleTheme = () => {
+    const newTheme = isDark ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', newTheme);
+    localStorage.setItem('theme', newTheme);
+    setIsDark(!isDark);
+  };
+
+  return (
+    <button className="theme-toggle" onClick={toggleTheme} aria-label="Toggle dark mode">
+      {isDark ? '☀️' : '🌙'}
+    </button>
+  );
+};
+
+// Component for related links sidebar
+interface RelatedLink {
+  title: string;
+  url: string;
+  description: string;
+}
+
+interface RelatedLinksSidebarProps {
+  activeTab: string | null;
+  learningTabs: LearningTab[];
+}
+
+const RelatedLinksSidebar: React.FC<RelatedLinksSidebarProps> = ({ activeTab, learningTabs }) => {
+  const [links, setLinks] = useState<RelatedLink[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [hasGenerated, setHasGenerated] = useState(false);
+
+  const generateRelatedLinks = async () => {
+    if (!activeTab) return;
+    
+    const tab = learningTabs.find(t => t.id === activeTab);
+    if (!tab) return;
+    
+    setIsLoading(true);
+    try {
+      const relatedLinks = await fetchRelatedLinks(tab.content);
+      setLinks(relatedLinks);
+      setHasGenerated(true);
+    } catch (error) {
+      console.error('Failed to generate related links:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="related-links-sidebar">
+      <h3 className="related-links-heading">Related Resources</h3>
+      
+      {!hasGenerated && (
+        <button className="related-links-button" onClick={generateRelatedLinks} disabled={isLoading || !activeTab}>
+          {isLoading ? 'Generating...' : 'Generate Related Links'}
+        </button>
+      )}
+      
+      {isLoading && (
+        <div className="related-link-loading">
+          <div className="loading-spinner"></div>
+          <span>Finding related resources...</span>
+        </div>
+      )}
+      
+      {hasGenerated && links.length === 0 && !isLoading && (
+        <div className="related-link-empty">
+          No related links found. Try again with more specific content.
+          <button 
+            className="related-links-button" 
+            onClick={generateRelatedLinks} 
+            style={{ marginTop: '1rem' }}
+          >
+            Try Again
+          </button>
+        </div>
+      )}
+      
+      {links.length > 0 && (
+        <>
+          <div className="related-links-list">
+            {links.map((link, index) => (
+              <div key={index} className="related-link-item">
+                <div className="related-link-title">{link.title}</div>
+                <a 
+                  href={link.url} 
+                  className="related-link-url" 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                >
+                  {link.url}
+                </a>
+                <div className="related-link-description">{link.description}</div>
+              </div>
+            ))}
+          </div>
+          
+          <button 
+            className="related-links-button" 
+            onClick={generateRelatedLinks} 
+            style={{ marginTop: '1rem' }}
+          >
+            Refresh Links
+          </button>
+        </>
+      )}
+    </div>
+  );
 };
 
 const FileUpload: React.FC<FileUploadProps> = ({
@@ -188,32 +330,30 @@ const FileUpload: React.FC<FileUploadProps> = ({
     }
   }, [learningTabs]);
 
-  // Function to delete a learning tab
-  const handleDeleteTab = useCallback((tabId: string, e: React.MouseEvent) => {
-    // Prevent the click from bubbling up to the parent button
-    e.stopPropagation();
-    
-    // Ask for confirmation before deleting
-    if (!window.confirm('Are you sure you want to delete this tab? This action cannot be undone.')) {
-      return;
+  // Function to handle tab click
+  const handleTabClick = (tabId: string) => {
+    setActiveTab(tabId);
+    setView('content');
+  };
+
+  // Function to handle tab deletion
+  const handleDeleteTab = (tabId: string, e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
     }
     
-    // Filter out the tab to delete
+    // Remove the tab from the learning tabs
     const updatedTabs = learningTabs.filter(tab => tab.id !== tabId);
     setLearningTabs(updatedTabs);
     
-    // If the active tab is being deleted, set a new active tab
-    if (activeTab === tabId) {
-      if (updatedTabs.length > 0) {
-        // Set the last tab as active
-        setActiveTab(updatedTabs[updatedTabs.length - 1].id);
-      } else {
-        // If no tabs remain, go back to upload view
-        setActiveTab(null);
-        setView('upload');
-      }
+    // If we're deleting the active tab, switch to the first available tab
+    if (activeTab === tabId && updatedTabs.length > 0) {
+      setActiveTab(updatedTabs[0].id);
+    } else if (updatedTabs.length === 0) {
+      // If no tabs left, go back to upload view
+      setView('upload');
     }
-  }, [learningTabs, activeTab]);
+  };
 
   // Store generated visualization code as components
   useEffect(() => {
@@ -539,14 +679,17 @@ const FileUpload: React.FC<FileUploadProps> = ({
   const convertToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.readAsDataURL(file);
       reader.onload = () => {
-        const base64String = reader.result as string;
-        // Remove the data URL prefix
-        const base64Data = base64String.split(',')[1];
-        resolve(base64Data);
+        if (typeof reader.result === 'string') {
+          // Remove the data URL prefix (e.g., "data:application/pdf;base64,")
+          const base64String = reader.result.split(',')[1];
+          resolve(base64String);
+        } else {
+          reject(new Error('FileReader result is not a string'));
+        }
       };
-      reader.onerror = (error) => reject(error);
+      reader.onerror = error => reject(error);
+      reader.readAsDataURL(file);
     });
   };
 
@@ -1185,7 +1328,6 @@ const FileUpload: React.FC<FileUploadProps> = ({
       regeneratedIndicator.style.backgroundColor = '#4f46e5';
       regeneratedIndicator.style.color = 'white';
       regeneratedIndicator.style.padding = '4px 8px';
-      regeneratedIndicator.style.fontSize = '12px';
       regeneratedIndicator.style.borderRadius = '4px';
       regeneratedIndicator.style.opacity = '0.8';
       container.appendChild(regeneratedIndicator);
@@ -1641,65 +1783,60 @@ const FileUpload: React.FC<FileUploadProps> = ({
 
   return (
     <div className="app-layout">
-      {/* Global sidebar with tabs */}
       <div className="global-sidebar">
-        <button 
+        <button
           className={`sidebar-upload-btn ${view === 'upload' ? 'active' : ''}`}
           onClick={goToUpload}
         >
-          <span className="sidebar-icon">📄</span>
-          <span className="tab-title">Upload</span>
+          <span className="sidebar-icon">📤</span>
+          Upload New Document
         </button>
         
         {learningTabs.length > 0 && (
           <>
             <div className="sidebar-divider"></div>
             <div className="sidebar-header">
-              <span>Your Lessons</span>
-              <button 
-                className="clear-all-btn" 
-                onClick={handleClearAllTabs}
-                title="Clear All Lessons"
-              >
-                Clear All
-              </button>
+              <span>YOUR LESSONS</span>
+              {learningTabs.length > 0 && (
+                <button className="clear-all-btn" onClick={handleClearAllTabs}>
+                  Clear All
+                </button>
+              )}
+            </div>
+            <div className="global-tabs-list">
+              {learningTabs.map(tab => (
+                <React.Fragment key={tab.id}>
+                  <button
+                    className={`global-tab-button ${activeTab === tab.id ? 'active' : ''}`}
+                    onClick={() => handleTabClick(tab.id)}
+                    title={tab.title}
+                  >
+                    <span className="sidebar-icon">📄</span>
+                    <span className="tab-title">{tab.title}</span>
+                    <span 
+                      className="delete-tab-btn" 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteTab(tab.id);
+                      }}
+                      title="Delete tab"
+                    >
+                      ×
+                    </span>
+                  </button>
+                </React.Fragment>
+              ))}
             </div>
           </>
         )}
-        
-        <div className="global-tabs-list">
-          {learningTabs.map(tab => (
-            <React.Fragment key={tab.id}>
-              <button
-                className={`global-tab-button ${activeTab === tab.id && view === 'content' ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveTab(tab.id);
-                  setView('content');
-                }}
-                title={tab.title}
-              >
-                <span className="sidebar-icon">📝</span>
-                <span className="tab-title">{tab.title}</span>
-                <button 
-                  className="delete-tab-btn"
-                  onClick={(e) => handleDeleteTab(tab.id, e)} 
-                  title="Delete tab"
-                >
-                  ×
-                </button>
-              </button>
-            </React.Fragment>
-          ))}
-        </div>
       </div>
-
-      {/* Main content area */}
+      
       <div className="main-area">
-        {view === 'upload' ? (
-          // Upload view
+        {/* Upload view */}
+        {view === 'upload' && (
           <div className="upload-view">
             <div className="upload-intro">
-              <p className="modern-intro">Upload your document to begin</p>
+              <h2 className="section-title">Upload your document to begin</h2>
             </div>
             <div className="file-upload">
               <div
@@ -1732,7 +1869,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
                   )}
                 </div>
               </div>
-              
+
               {file && !error && (
                 <div className="file-info">
                   <div className="file-details">
@@ -1770,118 +1907,51 @@ const FileUpload: React.FC<FileUploadProps> = ({
               </div>
             )}
           </div>
-        ) : view === 'content' ? (
-          // Content view
+        )}
+        
+        {/* Content view */}
+        {view === 'content' && activeTab && (
           <div className="content-view">
-            {activeTab && (
-              <div className="learning-results">
-                <div className="learning-header">
-                  <div className="learning-icon">📝</div>
-                  <div className="learning-title">
-                    {learningTabs.find(tab => tab.id === activeTab)?.title}
+            <div className="content-wrapper">
+              <div className="content-main">
+                <div className="learning-results">
+                  <div className="learning-header">
+                    <span className="learning-icon">📚</span>
+                    <span className="learning-title">
+                      {learningTabs.find(tab => tab.id === activeTab)?.title || 'Learning Material'}
+                    </span>
                   </div>
-                </div>
-                <div 
-                  className="learning-content-text" 
-                  dangerouslySetInnerHTML={formatResponse(
-                    learningTabs.find(tab => tab.id === activeTab)?.content || '',
-                    learningTabs.find(tab => tab.id === activeTab)?.visualizations || []
-                  )} 
-                />
-              </div>
-            )}
-          </div>
-        ) : (
-          // Visualization view
-          <div className="visualization-view">
-            {activeTab && (
-              <div className="visualization-container">
-                <div className="visualization-header">
-                  <div className="visualization-icon">📊</div>
-                  <div className="visualization-title">
-                    {learningTabs.find(tab => tab.id === activeTab)?.title}
-                  </div>
-                  
-                  <div className="visualization-controls">
-                    {/* Button to go back to document */}
-                    <button 
-                      className="back-to-document-button"
-                      onClick={() => {
-                        const tab = learningTabs.find(t => t.id === activeTab);
-                        if (tab) {
-                          setActiveTab(null);
-                          setView('content');
-                        }
-                      }}
-                    >
-                      <span className="button-icon">📝</span>
-                      <span>Back to Document</span>
-                    </button>
-                  </div>
-                </div>
-                
-                {/* Container for rendered visualizations */}
-                <div className="visualization-content">
-                  {(() => {
-                    const tab = learningTabs.find(t => t.id === activeTab);
-                    if (tab) {
-                      return (
-                        <>
-                          {tab.visualizations.map(visualization => (
-                            <div 
-                              key={visualization.id}
-                              className="visualization-item"
-                            >
-                              <div className="visualization-header">
-                                <div className="visualization-icon">📊</div>
-                                <div className="visualization-title">
-                                  {visualization.description}
-                                </div>
-                              </div>
-                              <div className="visualization-content">
-                                {(() => {
-                                  if (visualization.status === 'loading') {
-                                    return (
-                                      <div className="visualization-loading">
-                                        <div className="spinner"></div>
-                                        <p>Loading visualization...</p>
-                                      </div>
-                                    );
-                                  } else if (visualization.status === 'error') {
-                                    return (
-                                      <div className="visualization-error">
-                                        <div className="error-icon">⚠️</div>
-                                        <div>
-                                          <h3>Visualization Error</h3>
-                                          <p>{visualization.error || 'Failed to load visualization'}</p>
-                                        </div>
-                                      </div>
-                                    );
-                                  } else {
-                                    return (
-                                      <div 
-                                        ref={visualizationContainerRef}
-                                        id={`visualization-container-${visualization.id}`}
-                                        className="embedded-visualization-container"
-                                        data-code={encodeURIComponent(visualization.code)}
-                                      />
-                                    );
-                                  }
-                                })()}
-                              </div>
-                            </div>
-                          ))}
-                        </>
-                      );
-                    }
-                    return null;
-                  })()}
+                  <div 
+                    className="learning-content-text"
+                    dangerouslySetInnerHTML={formatResponse(
+                      learningTabs.find(tab => tab.id === activeTab)?.content || '',
+                      learningTabs.find(tab => tab.id === activeTab)?.visualizations || []
+                    )} 
+                  />
                 </div>
               </div>
-            )}
+              <RelatedLinksSidebar activeTab={activeTab} learningTabs={learningTabs} />
+            </div>
           </div>
         )}
+        
+        {view === 'visualization' && activeTab && (
+          <div className="visualization-view">
+            {/* visualization view content */}
+          </div>
+        )}
+        
+        <ThemeToggle />
       </div>
+      
+      {/* Add ChatBot with access to all document content */}
+      <ChatBot 
+        documents={learningTabs.map(tab => ({
+          id: tab.id,
+          title: tab.title,
+          content: tab.content
+        }))}
+      />
     </div>
   );
 };

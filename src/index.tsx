@@ -4,6 +4,10 @@ import './index.css';
 import App from './App';
 import reportWebVitals from './reportWebVitals';
 
+// Store Gemini API key in window object for the demo
+// In production, this should be handled securely
+(window as any).GEMINI_API_KEY = "AIzaSyA6oQllkl3Nr1kRX8LJm5CCmz2zp5gxDSo";
+
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
 );

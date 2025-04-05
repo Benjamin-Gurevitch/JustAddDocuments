@@ -12,6 +12,7 @@ interface LearningTab {
   title: string;
   content: string;
   visualizations: Visualization[];
+  fileData?: string; // Store the base64 data of the original file
 }
 
 interface Visualization {
@@ -130,15 +131,57 @@ const FileUpload: React.FC<FileUploadProps> = ({
     }
   }, []);
 
+  // Add a function to safely save to localStorage with size checking
+  const saveToLocalStorage = (key: string, data: any) => {
+    try {
+      const serialized = JSON.stringify(data);
+      
+      // Check if the serialized data is too large
+      // localStorage typically has a 5-10MB limit in most browsers
+      const sizeInMB = new Blob([serialized]).size / (1024 * 1024);
+      const warningSizeInMB = 4; // Warn at 4MB
+      
+      if (sizeInMB > warningSizeInMB) {
+        console.warn(`localStorage data for ${key} is ${sizeInMB.toFixed(2)}MB, approaching browser limits`);
+      }
+      
+      localStorage.setItem(key, serialized);
+      return true;
+    } catch (error) {
+      console.error('Error saving to localStorage:', error);
+      
+      // If we got a quota exceeded error, try removing the fileData
+      if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+        try {
+          // Try to save again without the file data
+          if (key === 'learningTabs' && Array.isArray(data)) {
+            const strippedData = data.map(tab => ({
+              ...tab,
+              fileData: undefined // Remove file data to save space
+            }));
+            
+            const serialized = JSON.stringify(strippedData);
+            localStorage.setItem(key, serialized);
+            
+            console.warn('Saved tabs without file data due to quota limits');
+            alert('Your browser storage limit was reached. Visualizations can no longer be regenerated without re-uploading the document.');
+            
+            return true;
+          }
+        } catch (retryError) {
+          console.error('Failed to save even without file data:', retryError);
+        }
+      }
+      
+      return false;
+    }
+  };
+
   // Save tabs to localStorage whenever they change
   useEffect(() => {
     // Only save if there are tabs to save
     if (learningTabs.length > 0) {
-      try {
-        localStorage.setItem('learningTabs', JSON.stringify(learningTabs));
-      } catch (e) {
-        console.error('Error saving tabs to localStorage:', e);
-      }
+      saveToLocalStorage('learningTabs', learningTabs);
     } else {
       // If no tabs, remove the item from localStorage
       localStorage.removeItem('learningTabs');
@@ -563,11 +606,24 @@ const FileUpload: React.FC<FileUploadProps> = ({
         
         // Create a new learning tab
         const newTabId = Date.now().toString();
+        
+        // Conditionally store file data based on size
+        // Only store file data for relatively small files (under 5MB)
+        // to avoid localStorage quota issues
+        let fileDataToStore: string | undefined = undefined;
+        
+        if (file.size < 5 * 1024 * 1024) { // 5MB limit
+          fileDataToStore = base64Data;
+        } else {
+          console.log(`File too large (${(file.size / (1024 * 1024)).toFixed(2)}MB) to cache in localStorage`);
+        }
+        
         const newTab: LearningTab = {
           id: newTabId,
           title: file.name,
           content: paperContent,
-          visualizations: processedVisualizations
+          visualizations: processedVisualizations,
+          fileData: fileDataToStore // Store the base64 data for regeneration if under size limit
         };
         
         setLearningTabs(prev => [...prev, newTab]);
@@ -589,6 +645,10 @@ const FileUpload: React.FC<FileUploadProps> = ({
   const formatResponse = (text: string, visualizations: Visualization[]) => {
     // First apply markdown formatting
     let formattedText = markdownToHtml(text);
+    
+    // Get the current tab
+    const tab = learningTabs.find(t => t.id === activeTab);
+    const fileDataAvailable = !!(file || cachedFile || (tab && tab.fileData));
     
     // Extract all visualization placeholders from the text
     const placeholderRegex = /{{VISUALIZATION:([a-zA-Z0-9_]+):([^}]+)}}/g;
@@ -613,7 +673,6 @@ const FileUpload: React.FC<FileUploadProps> = ({
       
       if (!visualization) {
         // This is a placeholder without a corresponding visualization
-        // Add a "Visual failed to generate" message with retry button
         replacementHtml = `<div class="visualization-placeholder error">
           <h4>Visualization: ${description}</h4>
           <div class="placeholder-status error">
@@ -623,9 +682,11 @@ const FileUpload: React.FC<FileUploadProps> = ({
               class="retry-button"
               onclick="window.dispatchEvent(new CustomEvent('regenerate-visualization', { detail: { id: '${id}', description: '${description.replace(/'/g, "\\'")}' } }))"
               ${regeneratingVisualizations[id] ? 'disabled' : ''}
+              ${!fileDataAvailable ? 'disabled' : ''}
             >
-              ${regeneratingVisualizations[id] ? 'Regenerating...' : 'Retry'}
+              ${regeneratingVisualizations[id] ? 'Regenerating...' : 'Generate'}
             </button>
+            ${!fileDataAvailable ? '<div class="file-data-warning">Document data not available. Please re-upload the document to regenerate visualizations.</div>' : ''}
           </div>
         </div>`;
       } else if (visualization.status === 'loading') {
@@ -642,6 +703,15 @@ const FileUpload: React.FC<FileUploadProps> = ({
           <div class="placeholder-status error">
             <div className="error-icon">⚠️</div>
             <div>Error: ${visualization.error || 'Failed to load visualization'}</div>
+            <button 
+              class="retry-button"
+              onclick="window.dispatchEvent(new CustomEvent('regenerate-visualization', { detail: { id: '${id}', description: '${description.replace(/'/g, "\\'")}' } }))"
+              ${regeneratingVisualizations[id] ? 'disabled' : ''}
+              ${!fileDataAvailable ? 'disabled' : ''}
+            >
+              ${regeneratingVisualizations[id] ? 'Regenerating...' : 'Try Again'}
+            </button>
+            ${!fileDataAvailable ? '<div class="file-data-warning">Document data not available. Please re-upload the document to regenerate visualizations.</div>' : ''}
           </div>
         </div>`;
       } else if (visualization.status === 'ready') {
@@ -656,10 +726,20 @@ const FileUpload: React.FC<FileUploadProps> = ({
           .replace(/"/g, "&quot;")
           .replace(/'/g, "&#039;");
 
-        // We'll inject the visualization into this container using the iframe approach
-        // AND add a <pre> tag to display the raw code underneath
+        // Add a regenerate button in the header
         replacementHtml = `<div class="visualization-placeholder ready">
-          <h4>Visualization: ${visualization.description}</h4>
+          <div class="visualization-header">
+            <h4>Visualization: ${visualization.description}</h4>
+            <button 
+              class="regenerate-button"
+              onclick="window.dispatchEvent(new CustomEvent('regenerate-visualization', { detail: { id: '${id}', description: '${description.replace(/'/g, "\\'")}' } }))"
+              ${regeneratingVisualizations[id] ? 'disabled' : ''}
+              ${!fileDataAvailable ? 'disabled' : ''}
+            >
+              ${regeneratingVisualizations[id] ? 'Regenerating...' : 'Regenerate'}
+            </button>
+          </div>
+          ${!fileDataAvailable ? '<div class="file-data-warning">Document data not available. Please re-upload the document to regenerate visualizations.</div>' : ''}
           <div id="${visContainerId}" class="embedded-visualization-container" data-code="${encodeURIComponent(visualization.code)}"></div>
           <details>
             <summary>Show Code</summary>
@@ -670,6 +750,9 @@ const FileUpload: React.FC<FileUploadProps> = ({
       
       formattedText = formattedText.replace(placeholderTag, replacementHtml);
     });
+    
+    // Remove any remaining text in curly braces ({{...}}) after processing visualizations
+    formattedText = formattedText.replace(/{{[^}]+}}/g, '');
     
     // Add safety for direct rendering
     return { __html: formattedText };
@@ -684,6 +767,9 @@ const FileUpload: React.FC<FileUploadProps> = ({
     setView('visualization');
   };
 
+  // Add a ref to track which visualizations have been manually updated
+  const manuallyUpdatedVisualizations = useRef(new Set<string>());
+
   // This effect renders embedded visualizations after the content is displayed
   useEffect(() => {
     if (view === 'content' && activeTab) {
@@ -694,7 +780,8 @@ const FileUpload: React.FC<FileUploadProps> = ({
             const containerId = `vis-container-${visualization.id}`;
             const container = document.getElementById(containerId);
             
-            if (container) {
+            // Skip if this visualization was manually updated
+            if (container && !manuallyUpdatedVisualizations.current.has(visualization.id)) {
               // Clear previous content
               while (container.firstChild) {
                 container.removeChild(container.firstChild);
@@ -969,6 +1056,11 @@ const FileUpload: React.FC<FileUploadProps> = ({
           }
         });
       }
+
+      // Reset manually updated visualizations on tab change
+      return () => {
+        manuallyUpdatedVisualizations.current.clear();
+      };
     }
   }, [view, activeTab, learningTabs]);
 
@@ -978,10 +1070,27 @@ const FileUpload: React.FC<FileUploadProps> = ({
   const handleRegenerateVisualization = useCallback(async (visId: string, description: string) => {
     if (!activeTab) return;
     
-    // Check if we have the file or the cached file
-    const fileToUse = file || cachedFile;
-    if (!fileToUse) {
-      console.error('No file available for visualization regeneration');
+    // Get the current tab
+    const currentTab = learningTabs.find(t => t.id === activeTab);
+    if (!currentTab) return;
+    
+    // Check for file data sources in priority order:
+    // 1. Current file in memory
+    // 2. Cached file in memory
+    // 3. File data stored in the tab (from localStorage)
+    let base64Data: string | null = null;
+    
+    if (file) {
+      base64Data = await convertToBase64(file);
+    } else if (cachedFile) {
+      base64Data = await convertToBase64(cachedFile);
+    } else if (currentTab.fileData) {
+      base64Data = currentTab.fileData;
+    }
+    
+    if (!base64Data) {
+      console.error('No file data available for visualization regeneration');
+      alert('Unable to regenerate visualization: original document data not found. Please re-upload the document.');
       return;
     }
     
@@ -989,17 +1098,10 @@ const FileUpload: React.FC<FileUploadProps> = ({
     setRegeneratingVisualizations(prev => ({ ...prev, [visId]: true }));
     
     try {
-      // Get the current tab
-      const currentTab = learningTabs.find(t => t.id === activeTab);
-      if (!currentTab) return;
-      
-      // Convert file to base64 again
-      const base64Data = await convertToBase64(fileToUse);
-      
       // Generate a new visualization for this placeholder
       const newVisualizationCode = await generateVisualizationForPlaceholder(description, base64Data);
       
-      // Update the visualization in the tab
+      // Create updated visualization
       const updatedVisualization = {
         id: visId,
         description,
@@ -1007,39 +1109,343 @@ const FileUpload: React.FC<FileUploadProps> = ({
         status: 'ready' as const
       };
       
-      // Update the tab with the new visualization
-      const updatedTabs = learningTabs.map(tab => {
-        if (tab.id === activeTab) {
-          // Find the visualization and update it, or add it if it doesn't exist
-          const visualizationExists = tab.visualizations.some(v => v.id === visId);
-          
-          if (visualizationExists) {
-            return {
-              ...tab,
-              visualizations: tab.visualizations.map(v => 
-                v.id === visId ? updatedVisualization : v
-              )
-            };
-          } else {
-            return {
-              ...tab,
-              visualizations: [...tab.visualizations, updatedVisualization]
-            };
-          }
-        }
-        return tab;
+      // Update the specific visualization container directly
+      const containerId = `vis-container-${visId}`;
+      const container = document.getElementById(containerId);
+      if (container) {
+        renderVisualizationInContainer(container, updatedVisualization);
+      }
+      
+      // Now update learningTabs in the background without triggering full re-renders
+      // We'll use a batch update pattern to minimize render impact
+      requestAnimationFrame(() => {
+        // Update the visualization in the state - this will eventually persist to localStorage
+        // but we've already updated the DOM directly
+        setLearningTabs(prevTabs => 
+          prevTabs.map(tab => {
+            if (tab.id === activeTab) {
+              return {
+                ...tab,
+                visualizations: tab.visualizations.map(v => 
+                  v.id === visId ? updatedVisualization : v
+                )
+              };
+            }
+            return tab;
+          })
+        );
       });
-      
-      setLearningTabs(updatedTabs);
-      
-      // Refresh the display
-      setActiveTab(activeTab);
     } catch (error) {
       console.error('Error regenerating visualization:', error);
+      alert(`Error regenerating visualization: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setRegeneratingVisualizations(prev => ({ ...prev, [visId]: false }));
     }
-  }, [activeTab, file, cachedFile, learningTabs, setLearningTabs, setActiveTab, convertToBase64]);
+  }, [activeTab, file, cachedFile, learningTabs, convertToBase64]);
+
+  // Add a helper function to render a single visualization
+  const renderVisualizationInContainer = (container: HTMLElement, visualization: Visualization) => {
+    // Mark this visualization as manually updated to prevent re-rendering
+    manuallyUpdatedVisualizations.current.add(visualization.id);
+    
+    // Clear previous content
+    while (container.firstChild) {
+      container.removeChild(container.firstChild);
+    }
+    
+    try {
+      // Create a sandboxed iframe for rendering the React component
+      const iframe = document.createElement('iframe');
+      iframe.style.width = '100%';
+      iframe.style.height = '400px';
+      iframe.style.border = 'none';
+      iframe.style.borderRadius = '8px';
+      iframe.style.backgroundColor = 'white';
+      iframe.title = `Visualization: ${visualization.description}`;
+      
+      container.appendChild(iframe);
+      
+      // Add visual indicator that this was regenerated
+      const regeneratedIndicator = document.createElement('div');
+      regeneratedIndicator.className = 'regenerated-indicator';
+      regeneratedIndicator.textContent = 'Regenerated';
+      regeneratedIndicator.style.position = 'absolute';
+      regeneratedIndicator.style.top = '10px';
+      regeneratedIndicator.style.right = '10px';
+      regeneratedIndicator.style.backgroundColor = '#4f46e5';
+      regeneratedIndicator.style.color = 'white';
+      regeneratedIndicator.style.padding = '4px 8px';
+      regeneratedIndicator.style.fontSize = '12px';
+      regeneratedIndicator.style.borderRadius = '4px';
+      regeneratedIndicator.style.opacity = '0.8';
+      container.appendChild(regeneratedIndicator);
+      
+      // Fade out the indicator after 3 seconds
+      setTimeout(() => {
+        regeneratedIndicator.style.transition = 'opacity 1s';
+        regeneratedIndicator.style.opacity = '0';
+        // Remove it after fade out
+        setTimeout(() => {
+          if (regeneratedIndicator.parentNode === container) {
+            container.removeChild(regeneratedIndicator);
+          }
+        }, 1000);
+      }, 3000);
+      
+      // Wait for iframe to load then inject the visualization
+      iframe.onload = () => {
+        if (iframe.contentDocument) {
+          // Get the raw code 
+          const rawCode = visualization.code || '';
+          
+          // Apply the renaming function to ensure the component is named 'App'
+          const transformedCode = renameComponentToApp(rawCode);
+          
+          // Create HTML content with necessary libraries
+          const htmlContent = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+              <meta charset="utf-8">
+              <title>Visualization</title>
+              
+              <!-- Add React and visualization libraries -->
+              <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+              <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+              <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+              <script src="https://cdn.jsdelivr.net/npm/d3@7.8.5/dist/d3.min.js"></script>
+              <script src="https://unpkg.com/recharts@2.10.3/dist/Recharts.js"></script>
+              <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
+              
+              <!-- Add react-chartjs-2 components -->
+              <script>
+                window.reactChartjs2 = {};
+                
+                // Create mock components for react-chartjs-2
+                ['Bar', 'Line', 'Pie', 'Doughnut', 'PolarArea', 'Radar', 'Scatter', 'Bubble'].forEach(chartType => {
+                  window.reactChartjs2[chartType] = function(props) {
+                    const canvasRef = React.useRef(null);
+                    
+                    React.useEffect(() => {
+                      if (canvasRef.current) {
+                        const ctx = canvasRef.current.getContext('2d');
+                        new Chart(ctx, {
+                          type: chartType.toLowerCase(),
+                          data: props.data,
+                          options: props.options
+                        });
+                      }
+                    }, [props.data, props.options]);
+                    
+                    return React.createElement('canvas', {
+                      ref: canvasRef,
+                      style: { maxHeight: '400px' }
+                    });
+                  };
+                });
+              </script>
+              
+              <!-- Add Babel for JSX transpilation -->
+              <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+              
+              <style>
+                body {
+                  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+                  margin: 0;
+                  padding: 20px;
+                  background-color: white;
+                }
+                #root {
+                  width: 100%;
+                }
+                /* Ensure charts are responsive */
+                canvas, svg {
+                  max-width: 100%;
+                }
+                .error-display {
+                  color: #ef4444;
+                  padding: 20px;
+                  border: 1px solid #fecaca;
+                  border-radius: 8px;
+                  background-color: #fef2f2;
+                  margin-bottom: 20px;
+                }
+              </style>
+            </head>
+            <body>
+              <div id="root"></div>
+              
+              <script>
+                // Make visualization libraries available as globals
+                window.React = React;
+                window.ReactDOM = ReactDOM;
+                window.Chart = Chart;
+                window.d3 = d3;
+                
+                // Add sample data in case the component needs it
+                window.sampleData = {
+                  labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
+                  datasets: [{
+                    label: 'Sample Data',
+                    data: [12, 19, 3, 5, 2, 3],
+                    backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                    borderColor: 'rgba(75, 192, 192, 1)',
+                    borderWidth: 1
+                  }]
+                };
+              </script>
+              
+              <script type="text/babel" data-type="module">
+              // Make library components available in scope
+              const { Bar, Line, Pie, Doughnut, PolarArea, Radar, Scatter, Bubble } = window.reactChartjs2;
+              
+              // Define the visualization component
+              try {
+                // The user's code
+                ${transformedCode}
+                
+                const container = document.getElementById('root');
+                const root = ReactDOM.createRoot(container); 
+
+                // Try to render the component
+                let ComponentToRender = null;
+                
+                // DEFENSE: Explicitly check and protect against problematic components
+                // Capture global objects before and after code evaluation to find new components
+                const safeComponentSearch = () => {
+                  // Explicitly check for App first - our preferred component
+                  if (typeof App === 'function') {
+                    // Additional safety check - make sure it's not a class constructor
+                    if (App.prototype && App.prototype.isReactComponent) {
+                      // It's a class component - need to make sure to use 'new'
+                      return (props) => new App(props);
+                    }
+                    return App;
+                  }
+                    
+                  // Check for any custom component EXCEPT "An" (which causes issues)
+                  for (const key in window) {
+                    if (key !== 'An' && // Explicitly exclude "An" component
+                        typeof window[key] === 'function' && 
+                        /^[A-Z]/.test(key) && 
+                        key !== 'React' && 
+                        key !== 'ReactDOM' &&
+                        key !== 'Chart') {
+                        
+                      // Additional safety check for class components
+                      if (window[key].prototype && window[key].prototype.isReactComponent) {
+                        // It's a class component - wrap it with proper instantiation
+                        return (props) => new window[key](props);
+                      }
+                      
+                      return window[key];
+                    }
+                  }
+                  
+                  return null;
+                };
+                
+                ComponentToRender = safeComponentSearch();
+                
+                if (ComponentToRender) {
+                  try {
+                    // Create a simple wrapper component for additional safety
+                    const SafeWrapper = (props) => {
+                      try {
+                        const element = React.createElement(ComponentToRender, props);
+                        return React.createElement('div', { style: { width: '100%', height: '100%' } }, element);
+                      } catch (error) {
+                        console.error("Error creating element:", error);
+                        return React.createElement('div', { className: 'error-display' },
+                          React.createElement('h3', null, 'Error Creating Visualization'),
+                          React.createElement('p', null, error.message),
+                          React.createElement('p', null, 'Check the browser console for more details.')
+                        );
+                      }
+                    };
+                    
+                    // Render with sample data props using createRoot
+                    root.render(React.createElement(SafeWrapper, { data: window.sampleData }));
+                  } catch (propsError) {
+                    console.error("Error during render with props:", propsError);
+                    try {
+                      // Try rendering without props using createRoot
+                      root.render(React.createElement('div', null, 
+                        React.createElement('p', null, 'Falling back to basic rendering...'),
+                        React.createElement(ComponentToRender)
+                      ));
+                    } catch (finalError) {
+                      document.getElementById('root').innerHTML = 
+                        '<div class="error-display">' +
+                        '<h3 style="margin-top: 0;">Error Rendering Visualization</h3>' +
+                        '<p>' + finalError.message + '</p>' +
+                        '<p>Check the browser console for more details.</p>' +
+                        '</div>';
+                    }
+                  }
+                } else {
+                  // If we couldn't find a suitable component, create a generic visualization
+                  // using Chart.js directly as a fallback
+                  const canvas = document.createElement('canvas');
+                  document.getElementById('root').appendChild(canvas);
+                  const ctx = canvas.getContext('2d');
+                  
+                  // Create a basic chart
+                  new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                      labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
+                      datasets: [{
+                        label: 'Generated Visualization',
+                        data: [12, 19, 3, 5, 2, 3],
+                        borderColor: 'rgb(75, 192, 192)',
+                        tension: 0.1
+                      }]
+                    },
+                    options: {
+                      responsive: true
+                    }
+                  });
+                  
+                  document.getElementById('root').appendChild(
+                    document.createElement('div')
+                  ).innerHTML = '<p style="color: #666; margin-top: 10px;">Note: Used fallback rendering because no valid React component was found.</p>';
+                }
+              } catch (error) {
+                console.error('Visualization render error:', error);
+                
+                document.getElementById('root').innerHTML = 
+                  '<div class="error-display">' +
+                  '<h3 style="margin-top: 0;">Error Rendering Visualization</h3>' +
+                  '<p>' + error.message + '</p>' +
+                  '<p>Check the browser console for more details.</p>' +
+                  '</div>';
+              }
+              </script>
+            </body>
+            </html>
+          `;
+          
+          iframe.contentDocument.open();
+          iframe.contentDocument.write(htmlContent);
+          iframe.contentDocument.close();
+        }
+      };
+      
+      iframe.src = 'about:blank';
+    } catch (error) {
+      console.error('Error setting up embedded visualization:', error);
+      container.innerHTML = `
+        <div class="error-message">
+          <div class="error-icon">⚠️</div>
+          <div>
+            <h3>Error Setting Up Visualization</h3>
+            <p>${error instanceof Error ? error.message : 'Unknown error'}</p>
+          </div>
+        </div>
+      `;
+    }
+  }
 
   // Add listener for visualization regeneration events
   useEffect(() => {
